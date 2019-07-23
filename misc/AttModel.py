@@ -39,7 +39,7 @@ class Attention(nn.Module):
         att_h = self.h2att(h)                        # batch * att_hid_size
         att_h = att_h.unsqueeze(1)            # batch * att_size * att_hid_size
         dot = att + att_h                                # batch * att_size * att_hid_size
-        dot = F.tanh(dot)                              # batch * att_size * att_hid_size
+        dot = torch.tanh(dot)                              # batch * att_size * att_hid_size
         dot = dot.view(-1, self.att_hid_size)               # (batch * att_size) * att_hid_size
         # dot = F.dropout(dot, 0.3, training=self.training)
         dot = self.alpha_net(dot)                           # (batch * att_size) * 1
@@ -86,7 +86,7 @@ class Attention2(nn.Module):
             else:
                 dot = torch.cat((xt.unsqueeze(1), att_feats), 2)
 
-            dot = F.tanh(dot)                              # batch * att_size * att_hid_size
+            dot = torch.tanh(dot)                              # batch * att_size * att_hid_size
             dot = dot.view(-1, self.att_hid_size)               # (batch * att_size) * att_hid_size
             # dot = F.dropout(dot, 0.3, training=self.training)
             hAflat = self.alpha_net(dot)                           # (batch * att_size) * 1
