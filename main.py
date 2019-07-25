@@ -188,11 +188,11 @@ def eval_grounding(opt, vis=None):
 
 def train(epoch, opt, vis=None, vis_window=None):
     model.train()
-
+    print('Started training1')
     data_iter = iter(dataloader)
     nbatches = len(dataloader)
     train_loss = []
-
+    print('Started training')
     lm_loss_temp = []
     att2_loss_temp = []
     ground_loss_temp = []
@@ -200,6 +200,7 @@ def train(epoch, opt, vis=None, vis_window=None):
     start = time.time()
 
     for step in range(len(dataloader)-1):
+        print('yolo')
         data = data_iter.next()
         seg_feat, iseq, gts_seq, num, proposals, bboxs, box_mask, seg_id, region_feat, frm_mask, sample_idx, ppl_mask = data
         proposals = proposals[:,:max(int(max(num[:,1])),1),:]
@@ -668,6 +669,9 @@ if __name__ == '__main__':
     elif opt.optim == 'adamax':
     	optimizer = optim.Adamax(params)
 
+    print('start already')
+    # import pdb
+    # pdb.set_trace()
     for epoch in range(start_epoch, opt.max_epochs):
         if epoch > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0:
             if (epoch - opt.learning_rate_decay_start) % opt.learning_rate_decay_every == 0:
@@ -679,6 +683,7 @@ if __name__ == '__main__':
             if opt.enable_visdom:
                 train(epoch, opt, vis, vis_window)
             else:
+                print('why dont you reach here')
                 train(epoch, opt)
 
         if epoch % opt.val_every_epoch == 0:
