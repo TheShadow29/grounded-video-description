@@ -11,7 +11,7 @@
 # Written by Luowei Zhou on 05/01/2019
 
 
-DATA_ROOT='/data/arka/ActNetEnt'
+DATA_ROOT='/home/Datasets/ActNetEnt/'
 echo $DATA_ROOT
 mkdir -p $DATA_ROOT/anet save results log
 

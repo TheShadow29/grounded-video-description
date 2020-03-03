@@ -9,6 +9,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import operator as op
+import itertools
 import collections
 import torch
 import torch.nn as nn
@@ -33,13 +35,15 @@ import sys
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-noc_object = ['bus', 'bottle', 'couch', 'microwave', 'pizza', 'racket', 'suitcase', 'zebra']
+noc_object = ['bus', 'bottle', 'couch', 'microwave',
+              'pizza', 'racket', 'suitcase', 'zebra']
 noc_index = [6, 40, 58, 69, 54, 39, 29, 23]
 
-noc_word_map = {'bus':'car', 'bottle':'cup',
-                'couch':'chair', 'microwave':'oven',
+noc_word_map = {'bus': 'car', 'bottle': 'cup',
+                'couch': 'chair', 'microwave': 'oven',
                 'pizza': 'cake', 'tennis racket': 'baseball bat',
                 'suitcase': 'handbag', 'zebra': 'horse'}
+
 
 def _is_pil_image(img):
     if accimage is not None:
@@ -47,12 +51,14 @@ def _is_pil_image(img):
     else:
         return isinstance(img, Image.Image)
 
+
 def update_values(dict_from, dict_to):
     for key, value in dict_from.items():
         if isinstance(value, dict):
             update_values(dict_from[key], dict_to[key])
         elif value is not None:
             dict_to[key] = dict_from[key]
+
 
 # Input: seq, N*D numpy array, with element 0 .. vocab_size. 0 is END token.
 """
@@ -87,6 +93,7 @@ def decode_sequence(itow, itod, ltow, itoc, wtod, seq, bn_seq, fg_seq, vocab_siz
     return out
 """
 
+
 def decode_sequence(itow, itod, ltow, itoc, wtod, seq, vocab_size, opt):
     N, D = seq.size()
 
@@ -96,7 +103,7 @@ def decode_sequence(itow, itod, ltow, itoc, wtod, seq, vocab_size, opt):
         for j in range(D):
             if j >= 1:
                 txt = txt + ' '
-            ix = seq[i,j]
+            ix = seq[i, j]
             if ix == 0:
                 break
             else:
@@ -124,22 +131,27 @@ class LMCriterion(nn.Module):
         # att2_weights and ground_weights have the same target
         assert(torch.sum(target >= self.vocab_size) == 0)
         txt_mask = target.data.gt(0)  # generate the mask
-        txt_mask = torch.cat([txt_mask.new(txt_mask.size(0), 1).fill_(1), txt_mask[:, :-1]], 1)
+        txt_mask = torch.cat(
+            [txt_mask.new(txt_mask.size(0), 1).fill_(1), txt_mask[:, :-1]], 1)
 
-        target = target.view(-1,1)
+        target = target.view(-1, 1)
         txt_select = torch.gather(txt_input, 1, target)
         if isinstance(txt_input, Variable):
             txt_mask = Variable(txt_mask)
-        txt_out = - torch.masked_select(txt_select, txt_mask.view(-1,1))
+        txt_out = - torch.masked_select(txt_select, txt_mask.view(-1, 1))
 
         assert(txt_out.size(0) == torch.sum(txt_mask.data))
         loss = torch.mean(txt_out)
 
         # attention loss
-        att2_loss = -torch.mean(torch.masked_select(F.log_softmax(att2_weights, dim=2), att2_target.byte()))
+        att2_loss = - \
+            torch.mean(torch.masked_select(F.log_softmax(
+                att2_weights, dim=2), att2_target.byte()))
 
         # grounding loss
-        ground_loss = -torch.mean(torch.masked_select(F.log_softmax(ground_weights, dim=2), att2_target.byte()))
+        ground_loss = - \
+            torch.mean(torch.masked_select(F.log_softmax(
+                ground_weights, dim=2), att2_target.byte()))
 
         # matching loss
         vis_mask = (input_seq > self.vocab_size)
@@ -253,27 +265,28 @@ class RandomCropWithBbox(object):
 
         i, j, h, w = self.get_params(img, self.size)
 
-        proposals[:,1] = proposals[:,1] - i
-        proposals[:,3] = proposals[:,3] - i
+        proposals[:, 1] = proposals[:, 1] - i
+        proposals[:, 3] = proposals[:, 3] - i
         proposals[:, 1] = np.clip(proposals[:, 1], 0, h - 1)
         proposals[:, 3] = np.clip(proposals[:, 3], 0, h - 1)
 
-        proposals[:,0] = proposals[:,0] - j
-        proposals[:,2] = proposals[:,2] - j
+        proposals[:, 0] = proposals[:, 0] - j
+        proposals[:, 2] = proposals[:, 2] - j
         proposals[:, 0] = np.clip(proposals[:, 0], 0, w - 1)
         proposals[:, 2] = np.clip(proposals[:, 2], 0, w - 1)
 
-        bboxs[:,1] = bboxs[:,1] - i
-        bboxs[:,3] = bboxs[:,3] - i
+        bboxs[:, 1] = bboxs[:, 1] - i
+        bboxs[:, 3] = bboxs[:, 3] - i
         bboxs[:, 1] = np.clip(bboxs[:, 1], 0, h - 1)
         bboxs[:, 3] = np.clip(bboxs[:, 3], 0, h - 1)
 
-        bboxs[:,0] = bboxs[:,0] - j
-        bboxs[:,2] = bboxs[:,2] - j
+        bboxs[:, 0] = bboxs[:, 0] - j
+        bboxs[:, 2] = bboxs[:, 2] - j
         bboxs[:, 0] = np.clip(bboxs[:, 0], 0, w - 1)
         bboxs[:, 2] = np.clip(bboxs[:, 2], 0, w - 1)
 
         return crop(img, i, j, h, w), proposals, bboxs
+
 
 def resize_bbox(bbox, width, height, rwidth, rheight):
     """
@@ -283,26 +296,30 @@ def resize_bbox(bbox, width, height, rwidth, rheight):
     width_ratio = rwidth / float(width)
     height_ratio = rheight / float(height)
 
-    bbox[:,0] = bbox[:,0] * width_ratio
-    bbox[:,2] = bbox[:,2] * width_ratio
-    bbox[:,1] = bbox[:,1] * height_ratio
-    bbox[:,3] = bbox[:,3] * height_ratio
+    bbox[:, 0] = bbox[:, 0] * width_ratio
+    bbox[:, 2] = bbox[:, 2] * width_ratio
+    bbox[:, 1] = bbox[:, 1] * height_ratio
+    bbox[:, 3] = bbox[:, 3] * height_ratio
 
     return bbox
 
+
 def bbox_overlaps(rois, gt_box, frm_mask):
 
-    overlaps = bbox_overlaps_batch(rois[:,:,:5], gt_box[:,:,:5], frm_mask)
+    overlaps = bbox_overlaps_batch(rois[:, :, :5], gt_box[:, :, :5], frm_mask)
 
     return overlaps
+
 
 def sim_mat_target(overlaps, pad_gt_bboxs):
     # overlaps: B, num_rois, num_box
     # pad_gt_bboxs: B, num_box (class labels)
     B, num_rois, num_box = overlaps.size()
     assert(num_box == pad_gt_bboxs.size(1))
-    masked_labels = (overlaps > 0.5).long() * pad_gt_bboxs.view(B, 1, num_box).long() # could try a higher threshold
-    return masked_labels.permute(0,2,1).contiguous()
+    masked_labels = (overlaps > 0.5).long() * pad_gt_bboxs.view(B,
+                                                                1, num_box).long()  # could try a higher threshold
+    return masked_labels.permute(0, 2, 1).contiguous()
+
 
 def bbox_target(mask, overlaps, seq, seq_update, vocab_size):
 
@@ -312,20 +329,22 @@ def bbox_target(mask, overlaps, seq, seq_update, vocab_size):
     max_rois = overlaps.size(1)
     batch_size = overlaps.size(0)
 
-    overlaps_copy.masked_fill_(mask.view(batch_size, 1, -1).expand_as(overlaps_copy), 0)
+    overlaps_copy.masked_fill_(
+        mask.view(batch_size, 1, -1).expand_as(overlaps_copy), 0)
     max_overlaps, gt_assignment = torch.max(overlaps_copy, 2)
 
     # get the labels.
     labels = (max_overlaps > 0.5).float()
-    no_proposal_idx = (labels.sum(1) > 0) != (seq.data[:,2] > 0)
+    no_proposal_idx = (labels.sum(1) > 0) != (seq.data[:, 2] > 0)
 
     # (deprecated) convert vis word to text word if there is not matched proposal
     if no_proposal_idx.sum() > 0:
-        seq_update[:,0][no_proposal_idx] = seq_update[:,3][no_proposal_idx]
-        seq_update[:,1][no_proposal_idx] = 0
-        seq_update[:,2][no_proposal_idx] = 0
+        seq_update[:, 0][no_proposal_idx] = seq_update[:, 3][no_proposal_idx]
+        seq_update[:, 1][no_proposal_idx] = 0
+        seq_update[:, 2][no_proposal_idx] = 0
 
     return labels
+
 
 def _affine_grid_gen(rois, input_size, grid_size):
 
@@ -339,15 +358,16 @@ def _affine_grid_gen(rois, input_size, grid_size):
     width = input_size[1]
 
     zero = Variable(rois.data.new(rois.size(0), 1).zero_())
-    theta = torch.cat([\
-      (x2 - x1) / (width - 1),
-      zero,
-      (x1 + x2 - width + 1) / (width - 1),
-      zero,
-      (y2 - y1) / (height - 1),
-      (y1 + y2 - height + 1) / (height - 1)], 1).view(-1, 2, 3)
+    theta = torch.cat([
+        (x2 - x1) / (width - 1),
+        zero,
+        (x1 + x2 - width + 1) / (width - 1),
+        zero,
+        (y2 - y1) / (height - 1),
+        (y1 + y2 - height + 1) / (height - 1)], 1).view(-1, 2, 3)
 
-    grid = F.affine_grid(theta, torch.Size((rois.size(0), 1, grid_size, grid_size)))
+    grid = F.affine_grid(theta, torch.Size(
+        (rois.size(0), 1, grid_size, grid_size)))
 
     return grid
 
@@ -358,8 +378,10 @@ def _jitter_boxes(gt_boxes, jitter=0.05):
     jittered_boxes = gt_boxes.copy()
     ws = jittered_boxes[:, 2] - jittered_boxes[:, 0] + 1.0
     hs = jittered_boxes[:, 3] - jittered_boxes[:, 1] + 1.0
-    width_offset = (np.random.rand(jittered_boxes.shape[0]) - 0.5) * jitter * ws
-    height_offset = (np.random.rand(jittered_boxes.shape[0]) - 0.5) * jitter * hs
+    width_offset = (np.random.rand(
+        jittered_boxes.shape[0]) - 0.5) * jitter * ws
+    height_offset = (np.random.rand(
+        jittered_boxes.shape[0]) - 0.5) * jitter * hs
     jittered_boxes[:, 0] += width_offset
     jittered_boxes[:, 2] += width_offset
     jittered_boxes[:, 1] += height_offset
@@ -369,6 +391,7 @@ def _jitter_boxes(gt_boxes, jitter=0.05):
 
 
 color_pad = ['red', 'green', 'blue', 'cyan', 'brown', 'orange']
+
 
 def vis_detections(ax, class_name, dets, color_i, rest_flag=0):
     """Visual debugging of detections."""
@@ -387,8 +410,8 @@ def vis_detections(ax, class_name, dets, color_i, rest_flag=0):
             )
         )
 
-        ax.text(bbox[0]+5, bbox[1] + 13, '%s' % (class_name)
-            , fontsize=9,  fontweight='bold', backgroundcolor=color_pad[color_i])
+        ax.text(bbox[0]+5, bbox[1] + 13, '%s' % (class_name), fontsize=9,
+                fontweight='bold', backgroundcolor=color_pad[color_i])
     else:
         ax.add_patch(
             patches.Rectangle(
@@ -399,24 +422,23 @@ def vis_detections(ax, class_name, dets, color_i, rest_flag=0):
                 lw=2,
                 color='grey'
             )
-        )    
-        ax.text(bbox[0]+5, bbox[1] + 13, '%s' % (class_name)
-            , fontsize=9,  fontweight='bold', backgroundcolor='grey')            
+        )
+        ax.text(bbox[0]+5, bbox[1] + 13, '%s' % (class_name),
+                fontsize=9,  fontweight='bold', backgroundcolor='grey')
     return ax
 
-import operator as op
 
-
-import itertools
 def cbs_beam_tag(num):
     tags = []
     for i in range(num+1):
         for tag in itertools.combinations(range(num), i):
-            tags.append(tag)        
+            tags.append(tag)
     return len(tags), tags
+
 
 def cmpSet(t1, t2):
     return sorted(t1) == sorted(t2)
+
 
 def containSet(List1, t1):
     # List1: return the index that contain

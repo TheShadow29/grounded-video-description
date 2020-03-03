@@ -28,17 +28,17 @@ import numpy as np
 
 INF = 1e10
 
+
 def positional_encodings_like(x, t=None):
     if t is None:
         positions = torch.arange(0, x.size(1))
         if x.is_cuda:
-           positions = positions.cuda(x.get_device())
+            positions = positions.cuda(x.get_device())
     else:
         positions = t
     encodings = torch.zeros(*x.size()[1:])
     if x.is_cuda:
         encodings = encodings.cuda(x.get_device())
-
 
     for channel in range(x.size(-1)):
         if channel % 2 == 0:
@@ -49,6 +49,7 @@ def positional_encodings_like(x, t=None):
                 positions / 10000 ** ((channel - 1) / x.size(2)))
     return Variable(encodings)
 
+
 def mask(targets, out):
     mask = (targets != 1)
     out_mask = mask.unsqueeze(-1).expand_as(out)
@@ -56,12 +57,15 @@ def mask(targets, out):
 
 # torch.matmul can't do (4, 3, 2) @ (4, 2) -> (4, 3)
 # not exactly true but keep it for legacy reason
+
+
 def matmul(x, y):
     if x.dim() == y.dim():
         return torch.matmul(x, y)
     if x.dim() == y.dim() - 1:
         return torch.matmul(x.unsqueeze(-2), y).squeeze(-2)
     return torch.matmul(x, y.unsqueeze(-2)).squeeze(-2)
+
 
 class LayerNorm(nn.Module):
 
@@ -76,6 +80,7 @@ class LayerNorm(nn.Module):
         std = x.std(-1, keepdim=True)
         return self.gamma * (x - mean) / (std + self.eps) + self.beta
 
+
 class ResidualBlock(nn.Module):
 
     def __init__(self, layer, d_model, drop_ratio):
@@ -86,6 +91,7 @@ class ResidualBlock(nn.Module):
 
     def forward(self, *x):
         return self.layernorm(x[0] + self.dropout(self.layer(*x)))
+
 
 class Attention(nn.Module):
 
@@ -104,6 +110,7 @@ class Attention(nn.Module):
             dot_products.data.sub_(tri.unsqueeze(0))
         return matmul(self.dropout(F.softmax(dot_products / self.scale, dim=-1)), value)
 
+
 class MultiHead(nn.Module):
 
     def __init__(self, d_key, d_value, n_heads, drop_ratio, causal=False):
@@ -120,7 +127,8 @@ class MultiHead(nn.Module):
         query, key, value = (
             x.chunk(self.n_heads, -1) for x in (query, key, value))
         return self.wo(torch.cat([self.attention(q, k, v)
-                          for q, k, v in zip(query, key, value)], -1))
+                                  for q, k, v in zip(query, key, value)], -1))
+
 
 class FeedForward(nn.Module):
 
@@ -131,6 +139,7 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         return self.linear2(F.relu(self.linear1(x)))
+
 
 class EncoderLayer(nn.Module):
 
@@ -144,6 +153,7 @@ class EncoderLayer(nn.Module):
 
     def forward(self, x):
         return self.feedforward(self.selfattn(x, x, x))
+
 
 class DecoderLayer(nn.Module):
 
@@ -162,6 +172,7 @@ class DecoderLayer(nn.Module):
         x = self.selfattn(x, x, x)
         return self.feedforward(self.attention(x, encoding, encoding))
 
+
 class Encoder(nn.Module):
 
     def __init__(self, d_model, d_hidden, n_vocab, n_layers, n_heads,
@@ -177,7 +188,8 @@ class Encoder(nn.Module):
     def forward(self, x, mask=None):
         # x = self.linear(x)
         if self.pe:
-            x = x+positional_encodings_like(x) # spatial configuration is already encoded
+            # spatial configuration is already encoded
+            x = x+positional_encodings_like(x)
         # x = self.dropout(x) # dropout is already in the pool_embed layer
         if mask is not None:
             x = x*mask
@@ -188,6 +200,7 @@ class Encoder(nn.Module):
                 x = x*mask
             encoding.append(x)
         return encoding
+
 
 class Decoder(nn.Module):
 
@@ -229,7 +242,7 @@ class Decoder(nn.Module):
                         0)), embedW)
             else:
                 hiddens[0][:, t] = hiddens[0][:, t] + F.embedding(prediction[:, t - 1],
-                                                                embedW)
+                                                                  embedW)
             hiddens[0][:, t] = self.dropout(hiddens[0][:, t])
             for l in range(len(self.layers)):
                 x = hiddens[l][:, :t + 1]
@@ -259,13 +272,14 @@ class Transformer(nn.Module):
         encoding = self.encoder(x)
         return encoding
 
+
 class TransformerDecoder(nn.Module):
 
     def __init__(self, d_model, n_vocab_src, vocab_trg, d_hidden=2048,
                  n_layers=2, n_heads=6, drop_ratio=0.2):
         super(TransformerDecoder, self).__init__()
         self.decoder = Decoder(d_model, d_hidden, vocab_trg, n_layers,
-                              n_heads, drop_ratio)
+                               n_heads, drop_ratio)
         self.n_layers = n_layers
 
     def forward(self, encoding, s, ss_ratio=1, infer=False, seq_length=20):
@@ -276,5 +290,6 @@ class TransformerDecoder(nn.Module):
         out = self.decoder(s[:, :-1].contiguous(), encoding)
         targets, out = mask(s[:, 1:].contiguous(), out)
         logits = self.decoder.out(out)
-        assert ss_ratio == 1, 'scheduled sampling does not work under pytorch 0.4' # TODO, ss_ratio<1 triggered gradient issues
+        # TODO, ss_ratio<1 triggered gradient issues
+        assert ss_ratio == 1, 'scheduled sampling does not work under pytorch 0.4'
         return F.cross_entropy(logits, targets)

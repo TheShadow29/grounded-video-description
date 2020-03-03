@@ -9,6 +9,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import yaml
+import opts
 import json
 import h5py
 import os
@@ -21,8 +23,12 @@ import torch.utils.data as data
 import copy
 from PIL import Image
 import torchvision.transforms as transforms
-import torchtext.vocab as vocab # use this to load glove vector
+import torchtext.vocab as vocab  # use this to load glove vector
 from collections import defaultdict
+import utils
+import sys
+sys.path.append('../')
+
 
 class DataLoader(data.Dataset):
     def __init__(self, opt, split='training', seq_per_img=5):
@@ -50,18 +56,19 @@ class DataLoader(data.Dataset):
         print('DataLoader loading json file: ', opt.input_dic)
         self.info = json.load(open(self.opt.input_dic))
         self.itow = self.info['ix_to_word']
-        self.wtoi = {w:i for i,w in self.itow.items()}
-        self.wtod = {w:i+1 for w,i in self.info['wtod'].items()} # word to detection
-        self.dtoi = self.wtod # detection to index
-        self.itod = {i:w for w,i in self.dtoi.items()}
+        self.wtoi = {w: i for i, w in self.itow.items()}
+        # word to detection
+        self.wtod = {w: i+1 for w, i in self.info['wtod'].items()}
+        self.dtoi = self.wtod  # detection to index
+        self.itod = {i: w for w, i in self.dtoi.items()}
         self.wtol = self.info['wtol']
-        self.ltow = {l:w for w,l in self.wtol.items()}
-        self.vocab_size = len(self.itow) + 1 # since it start from 1
+        self.ltow = {l: w for w, l in self.wtol.items()}
+        self.vocab_size = len(self.itow) + 1  # since it start from 1
         print('vocab size is ', self.vocab_size)
         self.itoc = self.itod
 
         # get the glove vector for the vg detection cls
-        obj_cls_file = 'data/vg_object_vocab.txt' # From Peter's repo
+        obj_cls_file = 'data/vg_object_vocab.txt'  # From Peter's repo
         with open(obj_cls_file) as f:
             data = f.readlines()
             classes = ['__background__']
@@ -71,19 +78,20 @@ class DataLoader(data.Dataset):
         self.vg_cls = classes
         self.glove_vg_cls = np.zeros((len(classes), 300))
         for i, w in enumerate(classes):
-                split_word = w.replace(',', ' ').split(' ')
-                vector = []
-                for word in split_word:
-                    if word in self.glove.stoi:
-                        vector.append(self.glove.vectors[self.glove.stoi[word]].numpy())
-                    else: # use a random vector instead
-                        vector.append(2*np.random.rand(300) - 1)
+            split_word = w.replace(',', ' ').split(' ')
+            vector = []
+            for word in split_word:
+                if word in self.glove.stoi:
+                    vector.append(
+                        self.glove.vectors[self.glove.stoi[word]].numpy())
+                else:  # use a random vector instead
+                    vector.append(2*np.random.rand(300) - 1)
 
-                avg_vector = np.zeros((300))
-                for v in vector:
-                    avg_vector += v
+            avg_vector = np.zeros((300))
+            for v in vector:
+                avg_vector += v
 
-                self.glove_vg_cls[i] = avg_vector/len(vector)
+            self.glove_vg_cls[i] = avg_vector/len(vector)
 
         # open the caption json file
         print('DataLoader loading json file: ', opt.input_json)
@@ -102,13 +110,13 @@ class DataLoader(data.Dataset):
 
         # category id to labels. +1 becuase 0 is the background label.
         self.glove_clss = np.zeros((len(self.itod)+1, 300))
-        self.glove_clss[0] = 2*np.random.rand(300) - 1 # background
+        self.glove_clss[0] = 2*np.random.rand(300) - 1  # background
         for i, word in enumerate(self.itod.values()):
-        	if word in self.glove.stoi:
-        		vector = self.glove.vectors[self.glove.stoi[word]]
-        	else: # use a random vector instead
-        		vector = 2*np.random.rand(300) - 1
-        	self.glove_clss[i+1] = vector        	
+            if word in self.glove.stoi:
+                vector = self.glove.vectors[self.glove.stoi[word]]
+            else:  # use a random vector instead
+                vector = 2*np.random.rand(300) - 1
+            self.glove_clss[i+1] = vector
 
         self.glove_w = np.zeros((len(self.wtoi)+1, 300))
         for i, word in enumerate(self.wtoi.keys()):
@@ -119,10 +127,10 @@ class DataLoader(data.Dataset):
                 if w in self.glove.stoi:
                     glove_vector = self.glove.vectors[self.glove.stoi[w]]
                     vector += glove_vector.numpy()
-                else: # use a random vector instead
+                else:  # use a random vector instead
                     random_vector = 2*np.random.rand(300) - 1
                     vector += random_vector
-            self.glove_w[i+1] = vector / count            
+            self.glove_w[i+1] = vector / count
 
         self.detect_size = len(self.itod)
 
@@ -137,24 +145,25 @@ class DataLoader(data.Dataset):
             if seg['split'] == split:
                 # all the feature files must exist
                 if os.path.isfile(os.path.join(self.feature_root, seg_id+'.npy')) and \
-                    os.path.isfile(os.path.join(self.seg_feature_root, vid_id[2:]+'_bn.npy')):
+                        os.path.isfile(os.path.join(self.seg_feature_root, vid_id[2:]+'_bn.npy')):
                     if opt.vis_attn:
-                        if random.random() < 0.001: # randomly sample 0.1% segments to visualize
+                        if random.random() < 0.001:  # randomly sample 0.1% segments to visualize
                             self.split_ix.append(ix)
                     else:
                         self.split_ix.append(ix)
-        print('assigned %d segments to split %s' %(len(self.split_ix), split))
+        print('assigned %d segments to split %s' % (len(self.split_ix), split))
 
     def get_det_word(self, gt_bboxs, caption, bbox_ann):
-        
+
         # get the present category.
         pcats = []
         for i in range(gt_bboxs.shape[0]):
-            pcats.append(gt_bboxs[i,6])
+            pcats.append(gt_bboxs[i, 6])
         # get the orginial form of the caption.
         indicator = []
 
-        indicator.append([(0, 0, 0)]*len(caption)) # category class, binary class, fine-grain class.
+        # category class, binary class, fine-grain class.
+        indicator.append([(0, 0, 0)]*len(caption))
         for i, bbox in enumerate(bbox_ann):
             # if the bbox_idx is not filtered out.
             if bbox['bbox_idx'] in pcats:
@@ -171,12 +180,12 @@ class DataLoader(data.Dataset):
         # gt_bboxs: num_box
         num_pps = proposals.shape[0]
         num_box = gt_bboxs.shape[0]
-        return (np.tile(proposals.reshape(-1,1), (1,num_box)) != np.tile(gt_bboxs, (num_pps,1)))
+        return (np.tile(proposals.reshape(-1, 1), (1, num_box)) != np.tile(gt_bboxs, (num_pps, 1)))
 
     def __getitem__(self, index):
 
         ix = self.split_ix[index]
-
+        # ix = index
         seg_id = self.info['videos'][ix]['id']
         vid_id_ix, seg_id_ix = seg_id.split('_segment_')
         seg_id_ix = str(int(seg_id_ix))
@@ -184,11 +193,13 @@ class DataLoader(data.Dataset):
         # load the proposal file
         num_proposal = int(self.num_proposals[ix])
         proposals = copy.deepcopy(self.label_proposals[ix])
-        proposals = proposals[:num_proposal,:]
+        proposals = proposals[:num_proposal, :]
 
         # no need to resize proposal nor GT box since they are all based on images with 720px in width)
-        region_feature = np.load(os.path.join(self.feature_root, seg_id+'.npy'))
-        region_feature = region_feature.reshape(-1, region_feature.shape[2]).copy()
+        region_feature = np.load(os.path.join(
+            self.feature_root, seg_id+'.npy'))
+        region_feature = region_feature.reshape(-1,
+                                                region_feature.shape[2]).copy()
         assert(num_proposal == region_feature.shape[0])
 
         # proposal mask to filter out low-confidence proposals or backgrounds
@@ -197,42 +208,52 @@ class DataLoader(data.Dataset):
             pnt_mask |= (proposals[:, 5] == 0)
 
         # load the frame-wise segment feature
-        seg_rgb_feature = np.load(os.path.join(self.seg_feature_root, vid_id_ix[2:]+'_resnet.npy'))
-        seg_motion_feature = np.load(os.path.join(self.seg_feature_root, vid_id_ix[2:]+'_bn.npy'))
-        seg_feature_raw = np.concatenate((seg_rgb_feature, seg_motion_feature), axis=1)
+        seg_rgb_feature = np.load(os.path.join(
+            self.seg_feature_root, vid_id_ix[2:]+'_resnet.npy'))
+        seg_motion_feature = np.load(os.path.join(
+            self.seg_feature_root, vid_id_ix[2:]+'_bn.npy'))
+        seg_feature_raw = np.concatenate(
+            (seg_rgb_feature, seg_motion_feature), axis=1)
 
         # not accurate, with minor misalignments
-        timestamps = self.raw_caption_file[vid_id_ix]['timestamps'][int(seg_id_ix)]
+        timestamps = self.raw_caption_file[vid_id_ix]['timestamps'][int(
+            seg_id_ix)]
         dur = self.raw_caption_file[vid_id_ix]['duration']
         num_frm = seg_feature_raw.shape[0]
-        sample_idx = np.array([np.round(num_frm*timestamps[0]*1./dur), np.round(num_frm*timestamps[1]*1./dur)])
-        sample_idx = np.clip(np.round(sample_idx), 0, self.t_attn_size).astype(int)
+        sample_idx = np.array(
+            [np.round(num_frm*timestamps[0]*1./dur), np.round(num_frm*timestamps[1]*1./dur)])
+        sample_idx = np.clip(np.round(sample_idx), 0,
+                             self.t_attn_size).astype(int)
         seg_feature = np.zeros((self.t_attn_size, seg_feature_raw.shape[1]))
-        seg_feature[:min(self.t_attn_size, num_frm)] = seg_feature_raw[:self.t_attn_size]
+        seg_feature[:min(self.t_attn_size, num_frm)
+                    ] = seg_feature_raw[:self.t_attn_size]
 
-        captions = [copy.deepcopy(self.caption_file[vid_id_ix]['segments'][seg_id_ix])] # one per segment
-        assert len(captions) == 1,  'Only support one caption per segment for now!'
+        # one per segment
+        captions = [copy.deepcopy(
+            self.caption_file[vid_id_ix]['segments'][seg_id_ix])]
+        assert len(
+            captions) == 1,  'Only support one caption per segment for now!'
 
         bbox_ann = []
         bbox_idx = 0
         for caption in captions:
             for i, clss in enumerate(caption['clss']):
-                for j, cls in enumerate(clss): # one box might have multiple labels
+                for j, cls in enumerate(clss):  # one box might have multiple labels
                     # we don't care about the boxes outside the length limit.
                     # after all our goal is referring, not detection
                     if caption['idx'][i][j] < self.seq_length:
                         if self.test_mode:
                             # dummy bbox and frm_idx for the hidden testing split
-                            bbox_ann.append({'bbox':[0, 0, 0, 0], 'label': self.dtoi[cls], 'clss': cls,
-                                'bbox_idx':bbox_idx, 'idx':caption['idx'][i][j], 'frm_idx':-1})
+                            bbox_ann.append({'bbox': [0, 0, 0, 0], 'label': self.dtoi[cls], 'clss': cls,
+                                             'bbox_idx': bbox_idx, 'idx': caption['idx'][i][j], 'frm_idx': -1})
                         else:
-                            bbox_ann.append({'bbox':caption['bbox'][i], 'label': self.dtoi[cls], 'clss': cls,
-                                'bbox_idx':bbox_idx, 'idx':caption['idx'][i][j], 'frm_idx':caption['frm_idx'][i]})
+                            bbox_ann.append({'bbox': caption['bbox'][i], 'label': self.dtoi[cls], 'clss': cls,
+                                             'bbox_idx': bbox_idx, 'idx': caption['idx'][i][j], 'frm_idx': caption['frm_idx'][i]})
 
                         bbox_idx += 1
 
         # (optional) sort the box based on idx
-        bbox_ann = sorted(bbox_ann, key=lambda x:x['idx'])
+        bbox_ann = sorted(bbox_ann, key=lambda x: x['idx'])
 
         gt_bboxs = np.zeros((len(bbox_ann), 8))
         for i, bbox in enumerate(bbox_ann):
@@ -242,16 +263,17 @@ class DataLoader(data.Dataset):
             gt_bboxs[i, 6] = bbox['bbox_idx']
             gt_bboxs[i, 7] = bbox['idx']
 
-        if not self.test_mode: # skip this in test mode
-            gt_x = (gt_bboxs[:,2]-gt_bboxs[:,0]+1)
-            gt_y = (gt_bboxs[:,3]-gt_bboxs[:,1]+1)
+        if not self.test_mode:  # skip this in test mode
+            gt_x = (gt_bboxs[:, 2]-gt_bboxs[:, 0]+1)
+            gt_y = (gt_bboxs[:, 3]-gt_bboxs[:, 1]+1)
             gt_area_nonzero = (((gt_x != 1) & (gt_y != 1)))
             gt_bboxs = gt_bboxs[gt_area_nonzero]
 
         # given the bbox_ann, and caption, this function determine which word belongs to the detection.
-        det_indicator = self.get_det_word(gt_bboxs, captions[0]['caption'], bbox_ann)
+        det_indicator = self.get_det_word(
+            gt_bboxs, captions[0]['caption'], bbox_ann)
         # fetch the captions
-        ncap = len(captions) # number of captions available for this image
+        ncap = len(captions)  # number of captions available for this image
         assert ncap > 0, 'an image does not have any label. this can be handled but right now isn\'t'
 
         # convert caption into sequence label.
@@ -261,43 +283,44 @@ class DataLoader(data.Dataset):
             while j < len(caption['caption']) and j < self.seq_length:
                 is_det = False
                 if det_indicator[i][j][0] != 0:
-                    cap_seq[i,j,0] = det_indicator[i][j][0] + self.vocab_size
-                    cap_seq[i,j,1] = det_indicator[i][j][1]
-                    cap_seq[i,j,2] = det_indicator[i][j][2]
-                    cap_seq[i,j,3] = self.wtoi[caption['caption'][j]]
-                    cap_seq[i,j,4] = self.wtoi[caption['caption'][j]]
+                    cap_seq[i, j, 0] = det_indicator[i][j][0] + self.vocab_size
+                    cap_seq[i, j, 1] = det_indicator[i][j][1]
+                    cap_seq[i, j, 2] = det_indicator[i][j][2]
+                    cap_seq[i, j, 3] = self.wtoi[caption['caption'][j]]
+                    cap_seq[i, j, 4] = self.wtoi[caption['caption'][j]]
                 else:
-                    cap_seq[i,j,0] = self.wtoi[caption['caption'][j]]
-                    cap_seq[i,j,4] = self.wtoi[caption['caption'][j]]
+                    cap_seq[i, j, 0] = self.wtoi[caption['caption'][j]]
+                    cap_seq[i, j, 4] = self.wtoi[caption['caption'][j]]
                 j += 1
 
-        # get the mask of the ground truth bounding box. The data shape is 
+        # get the mask of the ground truth bounding box. The data shape is
         # num_caption x num_box x num_seq
         box_mask = np.ones((len(captions), gt_bboxs.shape[0], self.seq_length))
         for i in range(gt_bboxs.shape[0]):
             box_mask[0, i, int(gt_bboxs[i][7])] = 0
 
-        gt_bboxs = gt_bboxs[:,:6]
+        gt_bboxs = gt_bboxs[:, :6]
 
         # get the batch version of the seq and box_mask.
         if ncap < self.seq_per_img:
             seq_batch = np.zeros([self.seq_per_img, self.seq_length, 4])
-            mask_batch = np.zeros([self.seq_per_img, gt_bboxs.shape[0], self.seq_length])
+            mask_batch = np.zeros(
+                [self.seq_per_img, gt_bboxs.shape[0], self.seq_length])
             # we need to subsample (with replacement)
             for q in range(self.seq_per_img):
-                ixl = random.randint(0,ncap)
-                seq_batch[q,:] = cap_seq[ixl,:,:4]
-                mask_batch[q,:] = box_mask[ixl]
+                ixl = random.randint(0, ncap)
+                seq_batch[q, :] = cap_seq[ixl, :, :4]
+                mask_batch[q, :] = box_mask[ixl]
         else:
             ixl = random.randint(0, ncap - self.seq_per_img)
-            seq_batch = cap_seq[ixl:ixl+self.seq_per_img,:,:4]
+            seq_batch = cap_seq[ixl:ixl+self.seq_per_img, :, :4]
             mask_batch = box_mask[ixl:ixl+self.seq_per_img]
 
         input_seq = np.zeros([self.seq_per_img, self.seq_length+1, 4])
-        input_seq[:,1:] = seq_batch
+        input_seq[:, 1:] = seq_batch
 
         gt_seq = np.zeros([10, self.seq_length])
-        gt_seq[:ncap,:] = cap_seq[:,:,4]
+        gt_seq[:ncap, :] = cap_seq[:, :, 4]
 
         # load the image for visualization purposes
         if self.vis_attn:
@@ -305,7 +328,8 @@ class DataLoader(data.Dataset):
             seg_dim_info = torch.LongTensor(2)
             for i in range(self.num_sampled_frm):
                 try:
-                    img = Image.open(os.path.join(self.opt.image_path, seg_id, str(i+1).zfill(2)+'.jpg')).convert('RGB')
+                    img = Image.open(os.path.join(self.opt.image_path, seg_id, str(
+                        i+1).zfill(2)+'.jpg')).convert('RGB')
                     width, height = img.size
                     seg_show[i, :height, :width] = np.array(img)
                     seg_dim_info[0] = height
@@ -319,19 +343,22 @@ class DataLoader(data.Dataset):
         pad_proposals = np.zeros((self.max_proposal, 7))
         pad_pnt_mask = np.ones((self.max_proposal))
         pad_gt_bboxs = np.zeros((self.max_gt_box, 6))
-        pad_box_mask = np.ones((self.seq_per_img, self.max_gt_box, self.seq_length+1))
+        pad_box_mask = np.ones(
+            (self.seq_per_img, self.max_gt_box, self.seq_length+1))
         pad_region_feature = np.zeros((self.max_proposal, self.att_feat_size))
-        pad_frm_mask = np.ones((self.max_proposal, self.max_gt_box)) # mask out proposals outside the target frames
+        # mask out proposals outside the target frames
+        pad_frm_mask = np.ones((self.max_proposal, self.max_gt_box))
 
         num_box = min(gt_bboxs.shape[0], self.max_gt_box)
         num_pps = min(proposals.shape[0], self.max_proposal)
         pad_proposals[:num_pps] = proposals[:num_pps]
         pad_pnt_mask[:num_pps] = pnt_mask[:num_pps]
         pad_gt_bboxs[:num_box] = gt_bboxs[:num_box]
-        pad_box_mask[:,:num_box,1:] = mask_batch[:,:num_box,:]
+        pad_box_mask[:, :num_box, 1:] = mask_batch[:, :num_box, :]
         pad_region_feature[:num_pps] = region_feature[:num_pps]
 
-        frm_mask = self.get_frm_mask(pad_proposals[:num_pps, 4], pad_gt_bboxs[:num_box, 4])
+        frm_mask = self.get_frm_mask(
+            pad_proposals[:num_pps, 4], pad_gt_bboxs[:num_box, 4])
         pad_frm_mask[:num_pps, :num_box] = frm_mask
 
         input_seq = torch.from_numpy(input_seq).long()
@@ -345,8 +372,9 @@ class DataLoader(data.Dataset):
         pad_region_feature.masked_fill_(pad_pnt_mask.view(-1, 1), 0.)
         pad_frm_mask = torch.from_numpy(pad_frm_mask).byte()
         num = torch.FloatTensor([ncap, num_pps, num_box, int(seg_id_ix),
-            max(self.num_seg_per_vid[vid_id_ix])+1, timestamps[0]*1./dur,
-            timestamps[1]*1./dur]) # 3 + 4 (seg_id, num_of_seg_in_video, seg_start_time, seg_end_time)
+                                 max(self.num_seg_per_vid[vid_id_ix]
+                                     )+1, timestamps[0]*1./dur,
+                                 timestamps[1]*1./dur])  # 3 + 4 (seg_id, num_of_seg_in_video, seg_start_time, seg_end_time)
         sample_idx = torch.from_numpy(sample_idx).long()
 
         if self.vis_attn:
@@ -354,7 +382,21 @@ class DataLoader(data.Dataset):
         else:
             return seg_feature, input_seq, gt_seq, num, pad_proposals, pad_gt_bboxs, pad_box_mask, seg_id, pad_region_feature, pad_frm_mask, sample_idx, pad_pnt_mask
 
-
     def __len__(self):
         return len(self.split_ix)
+
         # return 20
+
+
+if __name__ == '__main__':
+    opt = opts.parse_opt()
+    if opt.path_opt is not None:
+        with open(opt.path_opt, 'r') as handle:
+            options_yaml = yaml.load(handle)
+        utils.update_values(options_yaml, vars(opt))
+    opt.test_mode = (opt.val_split == 'testing')
+    if opt.enable_BUTD:
+        assert opt.att_input_mode == 'region', 'region attention only under the BUTD mode'
+
+    dataset = DataLoader(opt, split=opt.train_split,
+                         seq_per_img=opt.seq_per_img)
